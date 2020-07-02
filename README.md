@@ -11,11 +11,7 @@
 * Under the second splitting method, the Random forest classification perform very well in some specific regions where all other methods fail, and though its accuracy is not the highest (which is obtained by QDA method), the errors mainly occur near boundaries which can be smoothed and thus the accuracy would increase.
 * The optimization method applied to random forest classification is to increase its accuracy based on the expert labels. But the smoothing may be not that pragmatic since the experts tend to give labels to entire regions while in fact there are always cloud and not cloud small areas in an entire region.
 
-## Contributing
-
-Please read the last part of our report, which included in folder 'report',  for details on our code of conduct, and the process for submitting pull requests to us.
-
-## Authors
+## Author
 
 * **Xiaoyang Wu**  
 
