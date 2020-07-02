@@ -1,5 +1,6 @@
 # Daytime_Arctic_Cloud_Detection_Practice
 
+* This project is for "多元统计一" of SYSU
 * This project mainly explores and analyzes the classification methods in relevance to the paper Daytime Arctic Cloud Detection Based on Multi-Angle Satellite Data With Case Study written by Shi et al.
 * Latex files and figures all contained in folder 'report'
 * All code used in this project contained in folder 'code', including R code and Python code to perform random forest algorithm
