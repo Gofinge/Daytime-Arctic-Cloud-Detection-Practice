@@ -17,15 +17,8 @@ Please read the last part of our report, which included in folder 'report',  for
 
 ## Authors
 
-* **Xiaoyang Wu** 
-* **Lanxin Zhang**  
+* **Xiaoyang Wu**  
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
-
-## Acknowledgments
-
-* Thanks GSIs for answering our questions
-* Thanks Google for a lot of information
-* Thanks the paper provided, it offers a lot of inspiration for future statistic studying
