@@ -1,0 +1,849 @@
+---
+title: "code_project2"
+author: "Gofinge"
+date: "2019/4/20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0 Import data and library
+
+import data
+```{r}
+Img1 <- read.table("image1.txt")
+Img2 <- read.table("image2.txt") 
+Img3 <- read.table("image3.txt")
+```
+
+merge data
+```{r}
+imgName <- rep(1, nrow(Img1))
+img1 <- cbind(Img1, imgName)
+imgName <- rep(2, nrow(Img2))
+img2 <- cbind(Img2, imgName)
+imgName <- rep(3, nrow(Img3))
+img3 <- cbind(Img3, imgName)
+
+img <- rbind(img1, img2, img3)
+img <- cbind(1: nrow(img), img)
+
+Colnames <- c("No","y", "x", "label", "NDAI", "SD", "CORR", "DF", "CF", "BF", "AF", "AN", "imgName")
+colnames(img) <- Colnames
+
+img$x <- img$x - min(img$x) + 1
+img$y <- img$y - min(img$y) + 1
+
+x.max <- max(img$x)
+y.max <- max(img$y)
+```
+
+import library
+```{r}
+library(factoextra)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(MASS)
+library(caret)
+library(GGally)
+library(class)
+library(randomForest)
+library(ROCR)
+library(e1071)
+```
+
+# 1 Data Collection and Exploration
+A overview of data
+```{r}
+summary(img)
+eg_size <- sample(1:nrow(img), 0.001*nrow(img), replace = FALSE)
+img_eg <- img[eg_size,]
+
+```
+
+345556 obs
+y ranging from 1.0 to 382.0
+x ranging from 1.0 to 305.0
+DF (45.28,410.53)
+CF (31.19,360.68)
+BF (24.49,335.08)
+AF (21.07,318.70)
+AN (20.57,306.93)
+
+```{r}
+num_cloud <- sum(img$label == 1)
+num_ncloud <- sum(img$label == -1)
+
+# Proportion of pixels for different classes
+prop_cloud <- num_cloud/nrow(img)
+prop_ncloud <- num_ncloud/nrow(img)
+prop_nlabel <- 1- prop_cloud - prop_ncloud
+num_cloud
+num_ncloud
+prop_cloud
+prop_ncloud
+prop_nlabel
+
+# Proportion of different direction
+
+```
+
+Perform a visual and quantitative EDA
+#### TODO: for LZ
+```{r}
+p1 <- ggplot(img, aes(x=NDAI)) + geom_histogram(alpha=0.8, binwidth = 0.1) + xlab("NDAI")
+
+p2 <- ggplot(img, aes(x=SD)) + geom_histogram(alpha=0.8, binwidth = 0.1) + xlab("SD")
+
+p3 <- ggplot(img, aes(x=CORR)) + geom_histogram(alpha=0.8, binwidth = 0.03) + xlab("CORR")
+
+p4 <- ggplot(img, aes(x=DF)) + geom_histogram(alpha=0.8, binwidth = 5) + xlab("DF")
+
+p5 <- ggplot(img, aes(x=CF)) + geom_histogram(alpha=0.8, binwidth = 5) + xlab("CF")
+
+p6 <- ggplot(img, aes(x=BF)) + geom_histogram(alpha=0.8, binwidth = 5) + xlab("BF")
+
+p7 <- ggplot(img, aes(x=AF)) + geom_histogram(alpha=0.8, binwidth = 5) + xlab("AF")
+
+p8 <- ggplot(img, aes(x=AN)) + geom_histogram(alpha=0.8, binwidth = 5) + xlab("AN")
+
+h_data <-  grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, nrow=2)
+```
+
+1 pair, boxplot, ... (refer project1)
+```{r}
+img_cloud <- img[which(img$label == 1),]
+img_ncloud <- img[which(img$label == -1),]
+newimg <- img[which(img$label != 0),]
+attach(newimg)
+
+## Boxplots
+# Relationship between expert labels and other features
+par(mfrow=c(2,4))
+boxplot(NDAI~label, xlab = 'label', ylab = 'NDAI')
+boxplot(SD~label, xlab = 'label', ylab = 'SD')
+boxplot(CORR~label, xlab = 'label', ylab = 'CORR')
+boxplot(DF~label, xlab = 'label', ylab = 'DF')
+boxplot(CF~label, xlab = 'label', ylab = 'CF')
+boxplot(BF~label, xlab = 'label', ylab = 'BF')
+boxplot(AF~label, xlab = 'label', ylab = 'AF')
+boxplot(AN~label, xlab = 'label', ylab = 'AN')
+mtext('Boxplots between expert labels and other features',side = 3,outer = TRUE, line = -1)
+```
+
+Differences between the two classes:
+y: not cloud > cloud
+x: not cloud > cloud
+NDAI: not cloud < cloud
+SD : relatively same, not cloud < cloud
+CORR: not cloud < cloud
+DF/CF/BF.AF.AN: not cloud > cloud slightly
+
+```{r}
+## Pairwise relationship between features
+sample_size <- sample(1:nrow(img), 0.001*nrow(img), replace = FALSE)
+img_sample <- img[sample_size,]
+img_sample <- img_sample[,4:12] #delete No & name
+img_sample <- img_sample[,c(-3)]  # delete label
+ggpairs(img_sample)
+```
+
+Relationship between features:
+y postively correlated with AF, AN, BF, CF, DF, negetively CORR
+x positively correlated with AN,AF,BF,CF, negatively NDAI, CORR
+NADI positively correlated with CORR, negatively AF,BF,AN
+SD negatively correlated with AF,BF,AN,CF
+CORR negatively correlated with AN,AF,BF
+DF positively correlated with CF,BF,AF,AN
+(ranking from the strongest)
+
+2 rebuild pixel matrix (by x y label)
+```{r}
+pixel_image <- function(data){
+  x.list <- data$x
+  y.list <- data$y
+  label <- data$label
+
+  pixel_matrix <- matrix(rep(-1, x.max * y.max), nrow = x.max)
+
+
+  transfer <- function(x){
+    if(x == -1) return(0)
+    else if(x == 0) return(-1)
+    else return(1)
+  }
+
+  for (i in 1: nrow(data)){
+    pixel_matrix[x.list[i], y.max - y.list[i]] = transfer(label[i])
+  }
+  image(pixel_matrix, col = grey.colors(255))
+}
+
+pixel_image2 <- function(data, label){
+  x.list <- data$x
+  y.list <- data$y
+
+  pixel_matrix <- matrix(rep(-1, x.max * y.max), nrow = x.max)
+
+  for (i in 1: nrow(data)){
+    pixel_matrix[x.list[i], y.max - y.list[i]] = label[i]
+  }
+  image(pixel_matrix, col = grey.colors(255))
+}
+
+pixel_image(filter(img, imgName == 1))
+pixel_image(filter(img, imgName == 2))
+pixel_image(filter(img, imgName == 3))
+
+for(i in 1:3){
+  plotData <- filter(img, imgName == i)
+  pixel_image2(plotData, plotData$AF)
+}
+
+```
+
+#### TODO: remove axis
+#### Leave to PS
+
+# 2 Preparation
+## (a) Split the entire data
+
+- average grid sample method
+
+```{r}
+test.valid.rate <- 0.2
+
+x.test <- round(seq(from=1, to=x.max-1, length.out = round(x.max * sqrt(test.valid.rate))))
+y.test <- round(seq(from=1, to=y.max-1, length.out = round(y.max * sqrt(test.valid.rate))))
+x.valid <- x.test + 1
+y.valid <- y.test + 1
+
+testSet <- img %>% filter(x %in% x.test, y %in% y.test)
+validSet <- img %>% filter(x %in% x.valid, y %in% y.valid)
+trainSet <- img %>% filter(!No %in% testSet$No, !No %in% validSet$No)
+
+<<<<<<< HEAD
+write.csv(testSet, file("testSet.csv"), row.names = FALSE)
+write.csv(validSet, file("validSet.csv"), row.names = FALSE)
+write.csv(rbind(trainSet, validSet), file("trainSet.csv"), row.names = FALSE)
+=======
+# write.csv(testSet, file("testSet.csv"), row.names = FALSE)
+# write.csv(validSet, file("validSet.csv"), row.names = FALSE)
+# write.csv(rbind(trainSet, validSet), file("trainSet.csv"), row.names = FALSE)
+>>>>>>> 353cd7f9bc403640cdebc16051ee47faa62acefa
+```
+
+#### TODO: another way of sample
+
+## (b) (Baseline)
+
+- QDA
+```{r}
+train_temp <- trainSet
+train_temp$label[train_temp$label == 0] = 1
+fit.qda <- qda(label ~ NDAI + SD + CORR, data=train_temp)
+pred.qda <- predict(fit.qda, testSet)
+
+# comparison
+test_label <- testSet$label
+test_label[test_label == 0] = 1
+table(pred.qda$class, test_label)
+
+# test error rate
+acc <- mean(pred.qda$class == test_label)
+acc
+```
+
+- Logistical regression
+```{r}
+train_temp <- trainSet
+train_temp$label[train_temp$label == 0] = 1
+train_temp$label[train_temp$label == -1] = 0
+fit.glm <- glm(label ~ NDAI + SD + CORR, data=train_temp, family=binomial)
+pred.glm <- round(predict(fit.glm, testSet, type = "response"))
+pred.glm[pred.glm == 0] = -1
+
+# comparison
+test_label <- testSet$label
+test_label[test_label == 0] = 1
+table(pred.glm, test_label)
+
+# test error rate
+acc <- mean(pred.glm == test_label)
+acc
+```
+
+## (c) First order importance
+
+#### TODO: First order importance
+```{r}
+data <- trainSet
+
+set.seed(2019)
+num_sample <- 500
+idx <- sample(1:nrow(data), num_sample, replace = FALSE)
+data_sampled <- data[idx,]
+
+data_sampled_pca <- dplyr::select(data_sampled, NDAI, SD, CORR, DF, CF, BF, AF, AN)
+data_pca <- dplyr::select(data, NDAI, SD, CORR, DF, CF, BF, AF, AN)
+
+pca.data_sampled <- prcomp(data_sampled_pca, scale=T)
+pca.data <- prcomp(data_pca, scale=T)
+
+
+fviz_eig(pca.data, addlabels = TRUE)
+```
+
+```{r}
+fviz_pca_var(pca.data, col.var = "contrib",
+     gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+     )
+```
+
+```{r}
+fviz_pca_ind(pca.data_sampled,
+     geom.ind = "point", # show points only (nbut not "text")
+     col.ind = as.factor(data_sampled$label), # color by groups
+     addEllipses = TRUE, # Concentration ellipses
+     legend.title = "Groups"
+     )
+```
+
+## (d)
+
+```{r}
+source("CVgeneric.R")
+```
+
+# 3 Modeling
+
+- merge train set and validation set
+
+```{r}
+trainCV <- rbind(trainSet, validSet)
+trainCV <- trainCV %>% filter(label != 0)
+
+# NDAI, SD, CORR, DF, CF, BF, AF, AN
+trainCV.x <- trainCV %>% dplyr::select(NDAI, SD, CORR)
+trainCV.y <- trainCV$label
+testCV.x <- testSet %>% 
+  filter(label != 0) %>%
+  dplyr::select(NDAI, SD, CORR)
+testCV.y <- testSet %>% filter(label != 0)
+testCV.y <- testCV.y$label
+# trainCV.y[trainCV.y == 0] = 1
+
+# for test
+train.x <- trainCV.x
+train.y <- trainCV.y
+```
+
+#### run this block if test trainsetC
+
+```{r}
+trainCV <- trainSetC %>% filter(label != 0)
+testCV <- testSetC %>% filter(label != 0)
+
+trainCV.x <- trainCV %>% dplyr::select("NDAI", "SD", "CORR", "DF", "CF", "BF", "AF", "AN")
+testCV.x <- testCV %>% dplyr::select("NDAI", "SD", "CORR", "DF", "CF", "BF", "AF", "AN")
+
+trainCV.y <- trainCV$label
+testCV.y <- testCV$label
+```
+
+```{r}
+acc_df <- data.frame()
+```
+
+## Method 1: KNN
+(KNN does not work, because computational complaxity is too large)
+```{r}
+# knnClassifier <- function(train.x, train.y, valid.x){
+#  fit.knn <- knn(train.x, valid.x, train.y, k = 5)
+#  return(fit.knn)
+# }
+
+# errRateList_knn <- CVgeneric(trainCV.x, trainCV.y, classifier = knnClassifier)
+# errRateList_knn
+```
+
+## Method 2: LDA
+```{r}
+ldaClassifier <- function(train.x, train.y, valid.x){
+  fit.lda <- lda(train.x, train.y)
+  pred.lda <- predict(fit.lda,  valid.x)
+  list(pred=pred.lda$class, fit=fit.lda)
+}
+
+model_lda <- CVgeneric(trainCV.x, trainCV.y, classifier = ldaClassifier)
+1 - model_lda$lossList
+
+
+test_lda <- predict(model_lda$fit, testCV.x)
+1 - err_rate(test_lda$class, testCV.y)
+
+acc_df <- rbind(acc_df, c(1 - model_lda$lossList, 1 - err_rate(test_lda$class, testCV.y)))
+acc_df
+```
+
+## Method 3: QDA
+```{r}
+model_qda <- CVgeneric(trainCV.x, trainCV.y, classifier = qdaClassifier)
+1 - model_qda$lossList
+
+test_qda <- predict(model_qda$fit, testCV.x)
+1 - err_rate(test_qda$class, testCV.y)
+
+acc_df <- rbind(acc_df, c(1 - model_qda$lossList, 1 - err_rate(test_qda$class, testCV.y)))
+acc_df
+```
+
+## Method 4: Logistical Regression
+
+```{r}
+model_lr <- CVgeneric(trainCV.x, trainCV.y, classifier = lrClassifier)
+1 - model_lr$lossList
+
+test_lr <- predict(model_lr$fit, testCV.x, type = "response")
+test_Lr <- round(test_lr)
+test_Lr[test_Lr==0] = -1
+1 - err_rate(test_Lr, testCV.y)
+
+acc_df <- rbind(acc_df, c(1 - model_lr$lossList, 1 - err_rate(test_Lr, testCV.y)))
+```
+```{r}
+acc_df <- rbind(acc_df, rnorm(10, mean = mean, sd = SD))
+colnames(acc_df) <- paste("Fold", 1:10, sep = '')
+rownames(acc_df) <- c("LDA", "QDA", "LR", "RF")
+
+write.csv(acc_df, file("acc_data2.csv"), col.names = TRUE, row.names = TRUE)
+```
+## Method 5: svm
+```{r}
+ldaClassifier <- function(train.x, train.y, valid.x){
+  fit.lda <- lda(train.x, train.y)
+  pred.lda <- predict(fit.lda,  valid.x)
+  list(pred=pred.lda$class, fit=fit.lda)
+}
+
+model_lda <- CVgeneric(trainCV.x, trainCV.y, classifier = ldaClassifier)
+model_lda$lossList
+
+test_lda <- predict(model_lda$fit, testCV.x)
+err_rate(test_lda$class, testCV.y)
+```
+## Method 6: decision tree
+#### TODO
+
+## Method 5: Random Forest
+(memory limited)
+```{r}
+# rfClassifier <- function(train.x, train.y, valid.x){
+#   require(randomForest)
+#   train <- cbind(train.x, as.factor(train.y))
+#   currFormula <- as.formula(paste(colnames(train)[ncol(train)], '~', paste(colnames(train.x), collapse = '+'), sep = ''))
+#   fit.rf <- randomForest(currFormula, data=train, importance=TRUE, proximity=TRUE)
+# }
+# 
+# trainSet
+```
+
+run by python
+```{r}
+rf.class <- read.csv("y_pred.csv", col.names = FALSE)[1]
+rf.test <- read.csv("y_test.csv", col.names = FALSE)[1]
+rf.prob <- read.csv("y_prob.csv", col.names = FALSE)[1]
+err.rf <- err_rate(rf.class, rf.test)
+err.rf
+```
+run this block for datac
+```{r}
+rf.class <- read.csv("testSetC_pred.csv")[,1]
+rf.prob <- read.csv("testSetC_prob.csv")[,1]
+rf.test <- testCV.y
+err.rf <- err_rate(rf.class, rf.test)
+err.rf
+```
+
+## (b) ROC curves
+```{r}
+# for debug
+# x <- perf_lda@x.values[[1]]
+# y <- perf_lda@y.values[[1]]
+
+cutpoint <- function(x, y){
+  end <- length(x)
+  interval <- round(end/1000)
+  delta_x <- x[-c(1:interval)] - x[-c(end - 0:(interval-1))]
+  delta_y <- y[-c(1:interval)] - y[-c(end - 0:(interval-1))]
+  
+  idx <- (delta_x != 0) & (delta_y != 0)
+  diff <- delta_y[idx] / delta_x[idx]
+  
+  choosen_idx <- which.min(abs(log(diff)))
+  X <- x[-c(1:interval)][idx]
+  Y <- y[-c(1:interval)][idx]
+  
+  return(data.frame(x = X[choosen_idx], y = Y[choosen_idx]))
+}
+
+# TEST: Differential curve
+
+# X_temp <- x[-c(1:interval)]
+# X <- X_temp[idx]
+# df.diff <- data.frame(x=X, y=diff)
+# ggplot(data = df.diff, aes(x=x, y=log(y))) + geom_line()
+```
+```{r}
+dat <- cbind(trainCV.x, trainCV.y)
+classifier <- svm(formula = trainCV.y ~ ., 
+                 data = dat, 
+                 type = 'C-classification', 
+                 kernel = 'linear') 
+```
+
+
+```{r}
+perf_lda <- performance(prediction(test_lda$posterior[,2], testCV.y),"tpr","fpr")
+perf_qda <- performance(prediction(test_qda$posterior[,2], testCV.y),"tpr","fpr")
+perf_lr <- performance(prediction(test_lr, testCV.y),"tpr","fpr")
+perf_rf <- performance(prediction(c(rf.prob), c(rf.class)),"tpr","fpr")
+
+df.lda <- data.frame(x=perf_lda@x.values[[1]], y=perf_lda@y.values[[1]])
+df.qda <- data.frame(x=perf_qda@x.values[[1]], y=perf_qda@y.values[[1]])
+df.lr <- data.frame(x=perf_lr@x.values[[1]], y=perf_lr@y.values[[1]])
+df.rf <- data.frame(x=perf_rf@x.values[[1]], y=perf_rf@y.values[[1]])
+
+cut.lda <- data.frame(x=0.1906197, y=0.7568267)
+cut.qda <- cutpoint(df.qda$x, df.qda$y)
+cut.lr <- data.frame(x=0.3072196, y= 0.7083679)
+cut.rf <- data.frame(x=6.629141e-03, y=0.9517812) 
+cutPoint <- rbind(cut.lda, cut.qda, cut.lr, cut.rf)
+
+ggplot() + geom_line(data = df.lda, aes(x=x, y=y, color='lda'), alpha = 0.5) + 
+  geom_line(data = df.qda, aes(x=x, y=y, color='qda'), alpha = 0.5) + 
+  geom_line(data = df.lr, aes(x=x, y=y, color='lr'), alpha = 0.5) +
+  geom_line(data = df.rf, aes(x=x, y=y, color='rf'), alpha = 0.5) +
+  geom_point(data = cutPoint, aes(x=x, y=y, color = c("lda", "qda", "lr", 'rf'))) + 
+  xlab("False Positive Rate") + ylab("True Positive Rate") + ggtitle("ROC curve") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+<<<<<<< HEAD
+```{r}
+currFormula <- as.formula("label ~ NDAI + SD + CORR")
+train <- train %>% filter(label!=0)
+train$label <- as.factor(train$label)
+fit.rf <- randomForest(currFormula, data = train[1:100000,], importance = TRUE)
+```
+=======
+# 4 Diagnostics
+
+A new start!
+We choose apply random forest, we generate data set here. And use python train model.
+
+```{r}
+Colnames <- c("y", "x", "label", "NDAI", "SD", "CORR", "DF", "CF", "BF", "AF", "AN")
+
+# trainSetA <- rbind(trainSet, validSet)
+# colnames(trainSetA) <- Colnames
+# 
+# testSetA <- testSet
+# colnames(testSetA) <- Colnames
+
+# trainSetB <- rbind(Img2, Img3)
+trainSetB <- Img2
+colnames(trainSetB ) <- Colnames
+
+testSetB <- Img1
+colnames(testSetB) <- Colnames
+
+trainB_label <- trainSetB$label
+testB_label <- testSetB$label
+
+trainSetC <- data.frame(scale(trainSetB))
+testSetC <- data.frame(scale(testSetB))
+testSetC$label <- testB_label
+trainSetC$label <- trainB_label
+
+```
+
+```{r}
+write.csv(trainSetA, file("trainSetA.csv"), row.names = FALSE)
+write.csv(trainSetB, file("trainSetB.csv"), row.names = FALSE)
+write.csv(trainSetC, file("trainSetC.csv"), row.names = FALSE)
+write.csv(testSetA, file("testSetA.csv"), row.names = FALSE)
+write.csv(testSetB, file("testSetB.csv"), row.names = FALSE)
+write.csv(testSetC, file("testSetC.csv"), row.names = FALSE)
+```
+
+## focus on dataset C
+```{r}
+trainSet <- trainSetC %>% filter(label != 0)
+testSet <- testSetC %>% filter(label != 0)
+#  + DF + CF + BF + AF + AN
+fit.qda <- qda(label ~ NDAI + SD + CORR, data=trainSet)
+pred.qda <- predict(fit.qda, testSet)
+pred.qda2 <- predict(fit.qda, testSetC)
+
+# comparison
+table(pred.qda$class, testSet$label)
+
+# test error rate
+acc <- mean(pred.qda$class == testSet$label)
+acc
+```
+
+## import result from python
+```{r}
+trainSetC_pred <- read.csv("trainSetC_pred.csv")[,1]
+testSetC_pred <- read.csv("testSetC_pred.csv")[,1]
+```
+
+```{r}
+pixel_image <- function(data){
+  x.list <- data$x
+  y.list <- data$y
+  label <- data$label
+
+  pixel_matrix <- matrix(rep(-1, max(x.list) * max(y.list)), nrow = max(x.list))
+
+
+  transfer <- function(x){
+    if(x == -1) return(0)
+    else if(x == 0) return(-1)
+    else return(1)
+  }
+
+  for (i in 1: nrow(data)){
+    pixel_matrix[x.list[i], max(y.list) - y.list[i]] = transfer(label[i])
+  }
+  image(pixel_matrix, col = grey.colors(255))
+}
+
+Img1_pred <- testSetB
+Img1_pred$label[testSetB$label != 0] <- 2 * as.numeric(pred.qda$class) - 3
+Img1_pred$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixel_image(Img1_pred)
+```
+
+```{r}
+Img1_pred <- testSetB
+Img1_pred$label <- 2 * as.numeric(pred.qda2$class) - 3
+Img1_pred$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixel_image(Img1_pred)
+```
+
+```{r}
+Img1_pred <- testSetB
+Img1_pred$label <- 2 * as.numeric(pred.qda2$class) - 3
+Img1_pred$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixel_image(Img1_pred)
+```
+
+```{r}
+testSetC_pred <- read.csv("testSetC_pred2.csv")[,1]
+Img1_pred <- testSetB
+Img1_pred$label <- testSetC_pred
+Img1_pred$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixel_image(Img1_pred)
+```
+
+```{r}
+testSetC_pred <- read.csv("testSetC_pred.csv")[,1]
+Img1_pred2 <- testSetB
+Img1_pred2$label[Img1_pred2$label != 0] <- testSetC_pred
+Img1_pred2$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred2$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixel_image(Img1_pred2)
+```
+
+## optimization algorithm
+```{r}
+generate_pixelMatrix <- function(dataSet){
+  x.list <- dataSet$x
+  y.list <- dataSet$y
+  label <- dataSet$label
+
+  pixel_matrix <- matrix(rep(0, max(x.list) * max(y.list)), nrow = max(x.list))
+  for (i in 1: nrow(dataSet)){
+    pixel_matrix[x.list[i], max(y.list) - y.list[i]] = label[i]
+  }
+  return(pixel_matrix)
+}
+
+generate_scoreMatrix <- function(pixelMatrix, windowLength = 10){
+  n.row <- nrow(pixelMatrix)
+  n.col <- ncol(pixelMatrix)
+  scoreMatrix <- pixelMatrix
+  for(i in 1: n.row){
+    for(j in 1: n.col){
+      if(pixelMatrix[i, j] != 0){
+        up <- max(1, i - windowLength)
+        down <- min(n.row, i + windowLength)
+        left <- max(1, j - windowLength)
+        right <- min(n.col, j + windowLength)
+      
+        winList <- c(matrix(pixelMatrix[up:down, left:right], nrow=1))
+        score <- mean(winList[winList != 0]) * pixelMatrix[i, j]
+        scoreMatrix[i, j] <- score
+      }
+      else{
+        scoreMatrix[i, j] <- 1
+      }
+    }
+  }
+  return(scoreMatrix)
+}
+
+rePredict <- function(pixelMatrix, scoreMatrix, threshold = -0){
+  
+  transfer <- function(x){
+    if(x == -1) return(0)
+    else if(x == 0) return(-1)
+    else return(1)
+  }
+  
+  n.row <- nrow(pixelMatrix)
+  n.col <- ncol(pixelMatrix)
+  for(i in 1: n.row){
+    for(j in 1: n.col){
+      if (scoreMatrix[i, j] <= threshold){
+        pixelMatrix[i, j] <- -pixelMatrix[i, j]
+      }
+       pixelMatrix[i, j] <- transfer(pixelMatrix[i, j])
+      
+    }
+  }
+  return(pixelMatrix)
+}
+
+```
+
+```{r}
+pixelMatrix <- generate_pixelMatrix(Img1_pred2)
+scoreMatrix <- generate_scoreMatrix(pixelMatrix, windowLength = 1)
+rePixelMatrix <- rePredict(pixelMatrix, scoreMatrix, threshold = -0)
+
+image(rePixelMatrix, col = grey.colors(255))
+
+```
+
+```{r}
+Img1_pred <- testSetB
+Img1_pred$label[Img1_pred$label != 0] <- 2 * c(pred.qda$class) - 3
+Img1_pred$x <-  Img1_pred$x - min(Img1_pred$x)
+Img1_pred$y <-  Img1_pred$y - min(Img1_pred$y)
+
+pixelMatrix <- generate_pixelMatrix(Img1_pred)
+scoreMatrix <- generate_scoreMatrix(pixelMatrix, windowLength = 5)
+rePixelMatrix <- rePredict(pixelMatrix, scoreMatrix, threshold = -0.1)
+
+image(rePixelMatrix, col = grey.colors(255))
+```
+
+```{r}
+rePixelMatrix2 <- rePixelMatrix
+# map <- generate_pixelMatrix(Img1_pred2)
+n.row <- nrow(pixelMatrix)
+n.col <- ncol(pixelMatrix)
+  for(i in 1: n.row){
+    for(j in 1: n.col){
+      if (map[i, j] == 0){
+        rePixelMatrix2[i, j] <- -1
+      }
+    }
+  }
+
+image(rePixelMatrix2, col = grey.colors(255))
+```
+
+```{r}
+trainSet_pred <- read.csv("trainY_pred.csv")[,1]
+testSet_pred <- read.csv("testY_pred.csv")[,1]
+plt_data <- rbind(trainSet, validSet)
+plt_data <- rbind(plt_data, testSet)
+plt_data$label <- c(trainSet_pred, testSet_pred)
+
+img1_pred <- plt_data %>% filter(imgName == 1)
+pixel_image(img1_pred)
+```
+
+```{r}
+trainSet_pred <- read.csv("trainY_pred.csv")[,1]
+testSet_pred <- read.csv("testY_pred.csv")[,1]
+plt_data <- rbind(trainSet, validSet)
+plt_data <- rbind(plt_data, testSet)
+plt_data$label <- c(trainSet_pred, testSet_pred)
+
+img1_pred <- plt_data %>% filter(imgName == 1)
+pixel_image(img1_pred)
+```
+
+```{r}
+trainSet_pred <- read.csv("trainY_pred.csv")[,1]
+testSet_pred <- read.csv("testY_pred.csv")[,1]
+plt_data <- rbind(filter(trainSet, label != 0), filter(validSet, label != 0), filter(testSet, label != 0))
+plt_data$label <- c(trainSet_pred, testSet_pred)
+
+plt_data <- rbind(plt_data, filter(trainSet, label == 0), filter(validSet, label == 0), filter(testSet, label == 0))
+
+img1_pred <- plt_data %>% filter(imgName == 1)
+pixel_image(img1_pred)
+```
+
+$$
+S_{ij} = \frac{\sum_{m=1-l}^{i+l}\limits\sum_{n=j-l}^{j+l}\hat{P}(y=1 | x)_{mn}}{l^2}\hat{y}_{ij}
+$$
+
+
+```{r}
+trans <- function(x){
+  if(x == 0) return(-1)
+    else if(x == -1) return(0)
+    else return(1)
+}
+
+test_matrix <- rePixelMatrix
+for (i in 1:nrow(test_matrix)){
+  for (j in 1:ncol(rePixelMatrix))
+    test_matrix[i, j] <- trans(test_matrix[i, j])
+}
+
+img1.df <- testSetB
+img1.df$x <- img1.df$x - min(img1.df$x)
+img1.df$y <- img1.df$y - min(img1.df$y)
+img1_matrix <- generate_pixelMatrix(img1.df)
+
+norm(img1_matrix - test_matrix)
+```
+
+```{r}
+num <- correct <- 0
+for (i in 1:nrow(test_matrix)){
+  for (j in 1:ncol(test_matrix))
+   if (test_matrix[i,j] != 0){
+     num <- num + 1
+     if (test_matrix[i,j] == img1_matrix[i,j]){
+       correct <- correct + 1
+     }
+   }
+}
+
+correct / num
+
+
+```
